@@ -1,0 +1,62 @@
+name: Deploy Test
+
+on:
+  push:
+    branches: [test]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Generate version and time
+        id: generate_vars
+        run: |
+          DATE=$(date +%Y%m%d)
+          COMMIT_COUNT=$(git rev-list --count origin/dev)
+          SEMVER="${DATE}.${COMMIT_COUNT}"
+          TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "REACT_APP_VERSION=$SEMVER" >> $GITHUB_ENV
+          echo "REACT_APP_TIME=$TIME" >> $GITHUB_ENV
+          echo "提交版本: $SEMVER"
+          echo "提交时间: $TIME"
+
+      - name: Cache dependencies
+        id: cache-dep
+        uses: actions/cache@v5
+        with:
+          path: |
+            ./node_modules
+            ~/.npm  # npm 全局缓存
+            # 若用 yarn 替换为: ~/.cache/yarn
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        if: steps.cache-dep.outputs.cache-hit != 'true'
+        run: npm ci --prefer-offline
+
+      - name: build
+        run: |
+          export NODE_OPTIONS="--max-old-space-size=8192" && npm run build:test
+        env:
+          REACT_APP_ENV: test # 显式设置环境变量
+
+      - name: Deploy to Server
+        uses: burnett01/rsync-deployments@4.0
+        with:
+          switches: -avzr --delete --exclude=".git" --exclude=".github"
+          path: ./dist/
+          remote_path: /opt/html/wmsMng/
+          remote_host: 47.115.133.58
+          remote_user: root
+          remote_key: ${{ secrets.DEPLOY_KEY }}
+          remote_port: 10745
