@@ -1,6 +1,5 @@
 import BarcodeScanner from '@/components/barcode-scanner';
 import { boundQuickPreview } from '@/services/outbound/outboundAPI';
-import { normalizeCode } from '@/utils/normalize-code';
 import { useMutation } from '@umijs/max';
 import type { InputRef } from 'antd';
 import { Button, Form, Input, Modal } from 'antd';
@@ -10,35 +9,23 @@ import InboundAllocateModal from './inbound-allocate-modal';
 
 interface QuickActionConfig {
   readonly title: string;
-  readonly subtitle: string;
   readonly icon: string;
   readonly placeholder: string;
   readonly submitText: string;
-  readonly submitType: 'primary' | 'default';
-  readonly danger: boolean;
-  readonly confirmTitle: string;
 }
 
 const TYPE_CONFIG: Record<QuickActionType, QuickActionConfig> = {
   inbound: {
     title: '快捷入库',
-    subtitle: '请扫码或手动输入货仓编号',
     icon: '📥',
     placeholder: '输入货仓编号',
     submitText: '确认入库',
-    submitType: 'primary',
-    danger: false,
-    confirmTitle: '确认入库',
   },
   outbound: {
-    title: '快捷出库',
-    subtitle: '请扫码或手动输入订单号/货仓编号',
+    title: '出库',
     icon: '📤',
-    placeholder: '输入订单号或货仓编号',
-    submitText: '确认出库',
-    submitType: 'primary',
-    danger: true,
-    confirmTitle: '确认出库',
+    placeholder: '请输入编码',
+    submitText: '出库',
   },
 };
 
@@ -53,17 +40,11 @@ export interface QuickActionModalHandle {
   openWithCode: (locationNo: string) => Promise<void>;
 }
 
-type Step = 'input' | 'confirm';
-
 const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProps>(
   ({ type, trigger, onLookup, onFinish }, ref) => {
     const [modalOpen, setModalOpen] = useState<boolean>(false);
-    const [step, setStep] = useState<Step>('input');
-    const [currentCode, setCurrentCode] = useState<string>('');
-    const [lookupResult, setLookupResult] = useState<LocationLookupResult | null>(null);
-    const [previewData, setPreviewData] = useState<OutboundAPI.OutboundPreviewVO | null>(null);
-
     const [inboundAllocateOpen, setInboundAllocateOpen] = useState<boolean>(false);
+    const [isBusy, setIsBusy] = useState<boolean>(false);
 
     const [inputForm] = Form.useForm();
     const inputRef = useRef<InputRef>(null);
@@ -73,12 +54,6 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
 
     const previewMutation = useMutation({
       mutationFn: (keyword: string) => boundQuickPreview({ keyword }),
-      onSuccess: (res) => {
-        setPreviewData(res.code === 200 && res.data ? res.data : null);
-      },
-      onError: () => {
-        setPreviewData(null);
-      },
     });
 
     const handleScan = useCallback(
@@ -93,122 +68,105 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
         // 快捷入库直接打开操作弹窗
         setInboundAllocateOpen(true);
       } else {
-        setStep('input');
-        setCurrentCode('');
-        setLookupResult(null);
-        setPreviewData(null);
         setModalOpen(true);
-        window.setTimeout(() => {
-          inputForm.resetFields();
+        inputForm.resetFields();
+        setTimeout(() => {
           inputRef.current?.focus();
         }, 100);
       }
     }, [inputForm, isInbound]);
 
     const handleClose = useCallback(() => {
+      if (isBusy) return;
       setModalOpen(false);
       inputForm.resetFields();
-    }, [inputForm]);
+    }, [inputForm, isBusy]);
 
-    const fetchOutboundPreview = useCallback(
-      async (keyword: string): Promise<boolean> => {
-        try {
-          const res = await previewMutation.mutateAsync(keyword);
-          return res.code === 200 && !!res.data;
-        } catch {
-          return false;
-        }
-      },
-      [previewMutation],
-    );
+    const handleOutboundSubmit = useCallback(async () => {
+      // 防止重复提交
+      if (isBusy) return;
 
-    const handleInputSubmit = useCallback(async () => {
       try {
         const values: { locationNo: string } = await inputForm.validateFields();
-        const locationNo = values.locationNo.trim();
+        const inputValue = values.locationNo.trim();
 
-        const result = onLookup(locationNo);
+        if (!inputValue) {
+          inputForm.setFields([{ name: 'locationNo', errors: ['不能为空！'] }]);
+          return;
+        }
+
+        setIsBusy(true);
+
+        // 查找目标
+        const result = onLookup(inputValue);
         if (!result) {
           inputForm.setFields([{ name: 'locationNo', errors: ['未找到匹配货仓,请检查！'] }]);
+          setIsBusy(false);
           return;
         }
 
         if (result.errorMessage) {
           inputForm.setFields([{ name: 'locationNo', errors: [result.errorMessage] }]);
+          setIsBusy(false);
           return;
         }
 
-        setLookupResult(result);
-
-        if (isInbound) {
-          // 入库不再需要多步,直接在InboundAllocateModal处理
+        // 检查状态
+        if (result.status !== 'OCCUPIED' && result.status !== 'IDLE') {
+          inputForm.setFields([{ name: 'locationNo', errors: ['该货位状态不允许出库'] }]);
+          setIsBusy(false);
           return;
-        } else {
-          if (result.status === 'OCCUPIED') {
-            const success = await fetchOutboundPreview(result.locationNo);
-            if (!success) {
+        }
+
+        // 有货目标需要预览校验
+        if (result.status === 'OCCUPIED') {
+          try {
+            const res = await previewMutation.mutateAsync(result.locationNo);
+            if (res.code !== 200 || !res.data) {
+              inputForm.setFields([{ name: 'locationNo', errors: ['出库预览校验失败'] }]);
+              setIsBusy(false);
               return;
             }
+          } catch {
+            inputForm.setFields([{ name: 'locationNo', errors: ['出库预览校验失败'] }]);
+            setIsBusy(false);
+            return;
           }
-          setCurrentCode(normalizeCode(locationNo));
-          setStep('confirm');
         }
-      } catch {}
-    }, [inputForm, onLookup, isInbound, fetchOutboundPreview]);
 
-    const handleConfirmOk = useCallback(async () => {
-      const success = await onFinish({ locationNo: currentCode });
-      if (success) {
-        handleClose();
+        // 提交真实的locationNo，不是用户原始输入
+        const success = await onFinish({ locationNo: result.locationNo });
+        setIsBusy(false);
+
+        if (success) {
+          handleClose();
+        }
+      } catch {
+        setIsBusy(false);
       }
-    }, [currentCode, onFinish, handleClose]);
+    }, [inputForm, onLookup, previewMutation, onFinish, handleClose, isBusy]);
 
     const openWithCode = useCallback(
       async (locationNo: string) => {
         if (!locationNo) return;
 
-        setStep('input');
-        setLookupResult(null);
-        setPreviewData(null);
-        setCurrentCode(normalizeCode(locationNo));
+        setModalOpen(true);
+        inputForm.resetFields();
 
+        setTimeout(() => {
+          inputForm.setFieldsValue({ locationNo });
+          inputRef.current?.focus();
+        }, 100);
+
+        // 查找目标并显示可能的错误
         const result = onLookup(locationNo);
         if (!result) {
           inputForm.setFields([{ name: 'locationNo', errors: ['未找到对应货位,请检查编号'] }]);
-          window.setTimeout(() => {
-            inputForm.setFieldsValue({ locationNo });
-          }, 50);
-          return;
-        }
-
-        if (result.errorMessage) {
+        } else if (result.errorMessage) {
           inputForm.setFields([{ name: 'locationNo', errors: [result.errorMessage] }]);
-          window.setTimeout(() => {
-            inputForm.setFieldsValue({ locationNo });
-          }, 50);
-          return;
         }
-
-        setLookupResult(result);
-
-        if (isInbound) {
-          // 入库不再需要多步,直接在InboundAllocateModal处理
-        } else {
-          if (result.status === 'OCCUPIED') {
-            const success = await fetchOutboundPreview(result.locationNo);
-            if (!success) {
-              return;
-            }
-          }
-          setCurrentCode(normalizeCode(locationNo));
-          setStep('confirm');
-          window.setTimeout(() => {
-            inputForm.setFieldsValue({ locationNo });
-          }, 100);
-        }
-        setModalOpen(true);
       },
-      [inputForm, onLookup, isInbound, fetchOutboundPreview],
+      [inputForm, onLookup],
     );
 
     const handleInboundAllocateSuccess = useCallback(
@@ -236,109 +194,50 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
         {triggerElement}
 
         <Modal
-          title={null}
+          title={
+            <div className="flex items-center gap-2">
+              <span className="text-[20px]">{config.icon}</span>
+              <span className="text-[18px] font-semibold text-[#262626]">{config.title}</span>
+            </div>
+          }
           open={modalOpen}
           onCancel={handleClose}
           centered
-          width={420}
-          closable={false}
+          width={520}
+          closable={!isBusy}
           maskClosable={false}
           classNames={{
             content: '!p-[32px] !rounded-[18px]',
           }}
-          footer={
-            step === 'input' ? (
-              <div className="flex gap-[12px] w-full mt-[24px]">
-                <Button
-                  color="default"
-                  variant="filled"
-                  className="flex-1 h-[45px] rounded-[10px] text-[15px] font-medium"
-                  onClick={handleClose}
-                >
-                  取消
-                </Button>
-                <Button
-                  block
-                  type={config.submitType}
-                  danger={config.danger}
-                  className="flex-1 h-[45px] rounded-[10px] text-[15px] font-medium"
-                  onClick={handleInputSubmit}
-                >
-                  {config.submitText}
-                </Button>
-              </div>
-            ) : (
-              <div className="flex gap-[12px] w-full mt-[24px]">
-                <Button
-                  color="default"
-                  variant="filled"
-                  className="flex-1 h-[45px] rounded-[10px] text-[15px] font-medium"
-                  onClick={handleClose}
-                >
-                  取消
-                </Button>
-                <Button
-                  block
-                  type="primary"
-                  className="flex-1 h-[45px] rounded-[10px] text-[15px] font-medium"
-                  onClick={handleConfirmOk}
-                >
-                  确认
-                </Button>
-              </div>
-            )
-          }
+          footer={null}
         >
-          <div style={{ display: step === 'input' ? undefined : 'none' }}>
-            <div className="flex flex-col items-center text-center gap-2 mb-6">
-              <div className="text-[64px]">{config.icon}</div>
-              <div className="text-[18px] font-semibold text-[#262626]">{config.title}</div>
-              <div className="text-[13px] text-[#8C8C8C]">{config.subtitle}</div>
-            </div>
+          <div className="bg-[#F5F5F5] rounded-[10px] p-[14px_16px] mt-[16px]">
+            <div className="text-[13px] text-[#8C8C8C] mb-[8px]">货盘编码 / 货位编号 / 订单号</div>
             <Form form={inputForm} layout="vertical">
-              <Form.Item name="locationNo" rules={[{ required: true, message: '不能为空！' }]}>
-                <Input
-                  ref={inputRef}
-                  size="large"
-                  placeholder={config.placeholder}
-                  onPressEnter={handleInputSubmit}
-                  suffix={<BarcodeScanner onScan={handleScan} barcodeFormat={isInbound ? 'qr' : undefined} />}
-                />
+              <Form.Item name="locationNo" rules={[{ required: true, message: '不能为空！' }]} className="mb-0">
+                <div className="flex gap-[12px] items-center">
+                  <Input
+                    ref={inputRef}
+                    size="large"
+                    placeholder={config.placeholder}
+                    onPressEnter={handleOutboundSubmit}
+                    disabled={isBusy}
+                    className="flex-1 min-w-0"
+                    suffix={<BarcodeScanner onScan={handleScan} />}
+                  />
+                  <Button
+                    type="primary"
+                    className="h-[45px] rounded-[10px] text-[15px] font-medium px-[24px]"
+                    onClick={handleOutboundSubmit}
+                    loading={isBusy}
+                    disabled={isBusy}
+                  >
+                    {config.submitText}
+                  </Button>
+                </div>
               </Form.Item>
             </Form>
           </div>
-          {step === 'confirm' && (
-            <>
-              <div className="text-[18px] font-semibold text-[#262626] mb-[12px]">{config.confirmTitle}</div>
-              <div className="bg-[#F5F5F5] rounded-[10px] p-[14px_16px] my-[12px] leading-[1.8]">
-                <div className="text-[13px] text-[#8C8C8C]">
-                  目标货位：
-                  <span className="font-medium text-[14px] text-[#262626]">货位 #{lookupResult?.locationNo}</span>
-                </div>
-              </div>
-              {previewMutation.isPending ? (
-                <div className="text-center py-4 text-[#8C8C8C] text-[14px]">正在获取出库数据...</div>
-              ) : (
-                <div className="text-[16px] leading-normal">
-                  {previewData?.orderNo && (
-                    <div>
-                      <div>订单号：{previewData.orderNo}</div>
-                      <br />
-                    </div>
-                  )}
-                  {previewData?.itemName && (
-                    <div className="text-[14px] text-[#595959] mb-3">
-                      物品：
-                      <span className="font-medium text-[#262626]">
-                        {previewData.itemName} {previewData.itemWeight ? ` ${previewData.itemWeight}g` : ''}
-                      </span>
-                    </div>
-                  )}
-                  <div>{'确定执行出库操作吗？出库后货位将进入出库流程。'}</div>
-                </div>
-              )}
-            </>
-          )}
         </Modal>
 
         {isInbound && (
