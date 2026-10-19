@@ -1,4 +1,4 @@
-export type FilterKey = LocationAPI.Status | 'all';
+export type FilterKey = LocationAPI.Status | 'all' | 'executing';
 export interface StatusCardConfig {
   readonly label: string;
   readonly color: string;

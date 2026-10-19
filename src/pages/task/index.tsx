@@ -12,14 +12,22 @@ import { LoadingOutlined, PlayCircleOutlined, SearchOutlined } from '@ant-design
 import { PageContainer } from '@ant-design/pro-components';
 import { keepPreviousData } from '@tanstack/react-query';
 import { useMutation, useQuery, useQueryClient, useSearchParams } from '@umijs/max';
-import { App, Badge, Button, Input, Spin, Tag } from 'antd';
+import { Alert, App, Badge, Button, DatePicker, Input, Spin, Tag } from 'antd';
+import dayjs, { Dayjs } from 'dayjs';
+import timezone from 'dayjs/plugin/timezone';
+import utc from 'dayjs/plugin/utc';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 import FilterTabs from './components/filter-tabs';
 import TaskCard from './components/task-card';
 import TaskDetailDrawer from './components/task-detail-drawer';
 import useDragSort from './hooks/use-drag-sort';
 import type { FilterType } from './types';
 import { FILTER_SUBTITLE, STAT_ITEMS, mapTaskStatistics, type TaskStats } from './types';
+
+const { RangePicker } = DatePicker;
 
 const INITIAL_SIZE = 20;
 const SIZE_INCREMENT = 20;
@@ -40,12 +48,16 @@ const TaskPage: React.FC = () => {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
-  const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+  const [activeFilter, setActiveFilter] = useState<FilterType>('INBOUND_RECORDS');
   const [searchParams, setSearchParams] = useSearchParams();
   const initialKeyword = searchParams.get('keyword') ?? '';
   const [rawKeyword, setRawKeyword] = useState<string>(initialKeyword);
   const [keyword, setKeyword] = useState<string>(initialKeyword);
   const keywordTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Date range filter (default: today, timezone: Asia/Shanghai)
+  const today = dayjs().tz('Asia/Shanghai');
+  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([today.startOf('day'), today.endOf('day')]);
 
   const [drawerTask, setDrawerTask] = useState<TaskAPI.TaskVO | null>(null);
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
@@ -56,19 +68,37 @@ const TaskPage: React.FC = () => {
   const buildPageParams = useCallback(
     (pageSize: number): TaskAPI.TaskPageParams => {
       const params: TaskAPI.TaskPageParams = { page: 1, size: pageSize };
-      if (activeFilter !== 'all') {
+
+      if (activeFilter === 'INBOUND_RECORDS') {
+        params.taskType = 'INBOUND';
+      } else if (activeFilter === 'OUTBOUND_RECORDS') {
+        params.taskType = 'OUTBOUND';
+      } else if (activeFilter === 'EXECUTING') {
+        // API placeholder: Need backend support for queue view
+        // For now, filter EXECUTING + PENDING statuses
+        params.status = 'EXECUTING';
+      } else if (activeFilter !== 'all') {
         if (activeFilter === 'EXCEPTION') {
           params.status = 'EXCEPTION';
         } else {
           params.taskType = activeFilter as TaskAPI.TaskType;
         }
       }
+
       if (keyword) {
         params.keyword = keyword;
       }
+
+      // Date range for record views (not for EXECUTING)
+      if (activeFilter !== 'EXECUTING' && activeFilter !== 'all') {
+        // API placeholder: Date filtering requires backend support
+        // params.startDate = dateRange[0].format('YYYY-MM-DD HH:mm:ss');
+        // params.endDate = dateRange[1].format('YYYY-MM-DD HH:mm:ss');
+      }
+
       return params;
     },
-    [activeFilter, keyword],
+    [activeFilter, keyword, dateRange],
   );
 
   const taskListQueryKey = useMemo(
@@ -194,6 +224,17 @@ const TaskPage: React.FC = () => {
     [reorderMutation],
   );
 
+  const handleDateRangeChange = useCallback((dates: null | (Dayjs | null)[]) => {
+    if (dates && dates[0] && dates[1]) {
+      if (dates[0].isAfter(dates[1])) {
+        message.warning('起始日期不能晚于结束日期');
+        return;
+      }
+      setDateRange([dates[0], dates[1]]);
+      setSize(INITIAL_SIZE); // Reset pagination
+    }
+  }, [message]);
+
   const handleToggleAutoDispatch = useCallback(() => {
     setAutoDispatchMutation.mutate(!autoDispatchEnabled);
   }, [autoDispatchEnabled, setAutoDispatchMutation]);
@@ -255,17 +296,19 @@ const TaskPage: React.FC = () => {
       <div>
         <div className="flex items-start justify-between gap-[12px] pb-[8px]">
           <div>
-            <div className="text-[24px] leading-[35px] font-bold text-[#262626]">任务管理</div>
+            <div className="text-[24px] leading-[35px] font-bold text-[#262626]">出入库记录</div>
             <div className="text-[13px] leading-[19px] mt-[4px] text-[#8C8C8C]">{FILTER_SUBTITLE[activeFilter]}</div>
           </div>
-          <Button
-            type={'primary'}
-            loading={setAutoDispatchMutation.isPending}
-            icon={autoDispatchEnabled ? <LoadingOutlined /> : <PlayCircleOutlined />}
-            onClick={handleToggleAutoDispatch}
-          >
-            {autoDispatchEnabled ? '运行中' : '启动'}
-          </Button>
+          {activeFilter === 'EXECUTING' && (
+            <Button
+              type={'primary'}
+              loading={setAutoDispatchMutation.isPending}
+              icon={autoDispatchEnabled ? <LoadingOutlined /> : <PlayCircleOutlined />}
+              onClick={handleToggleAutoDispatch}
+            >
+              {autoDispatchEnabled ? '运行中' : '启动队列'}
+            </Button>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-[10px] py-[12px]">
@@ -282,6 +325,42 @@ const TaskPage: React.FC = () => {
             </Tag>
           ))}
         </div>
+
+        {/* Date range picker for record views */}
+        {(activeFilter === 'INBOUND_RECORDS' || activeFilter === 'OUTBOUND_RECORDS') && (
+          <div className="mb-[12px]">
+            <RangePicker
+              value={dateRange}
+              onChange={handleDateRangeChange}
+              showTime
+              format="YYYY-MM-DD HH:mm"
+              placeholder={['开始时间', '结束时间']}
+              className="w-full"
+            />
+            <div className="text-[12px] text-[#8C8C8C] mt-[4px]">
+              按创建时间筛选，使用业务时区 Asia/Shanghai
+            </div>
+          </div>
+        )}
+
+        {/* Executing queue status banner (API placeholder) */}
+        {activeFilter === 'EXECUTING' && (
+          <Alert
+            message="执行队列"
+            description={
+              <div>
+                <div>正在执行：<strong>—</strong> 个任务（实时进度需API支持）</div>
+                <div>待执行：<strong>—</strong> 个任务（队列顺序以服务端为准）</div>
+                <div className="mt-[8px] text-[12px]">
+                  异常阻断状态、恢复按钮可用性需API接入后展示
+                </div>
+              </div>
+            }
+            type="info"
+            showIcon
+            className="mb-[12px]"
+          />
+        )}
 
         <Input
           size="large"
@@ -313,7 +392,11 @@ const TaskPage: React.FC = () => {
                 onDragStart={handleDragStart}
               />
             ))}
-            {tasks.length === 0 && !isPending && <div className="text-center py-12 text-gray-400">暂无任务</div>}
+            {tasks.length === 0 && !isPending && (
+              <div className="text-center py-12 text-gray-400">
+                {activeFilter === 'EXECUTING' ? '当前无执行中任务' : '暂无任务记录'}
+              </div>
+            )}
             <div ref={sentinelRef} className="h-[1px]" />
             {loadingMore && (
               <div className="flex justify-center py-4">

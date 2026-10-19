@@ -321,8 +321,6 @@ const LocationDetailDrawer: React.FC<LocationDetailDrawerProps> = ({
 
       <InboundAllocateModal
         open={activeAction === 'inbound'}
-        isManual={true}
-        locationNo={location.locationNo}
         onCancel={() => setActiveAction(null)}
         onSuccess={async (values) => {
           const success = await onInboundSubmit(values);

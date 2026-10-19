@@ -1,12 +1,11 @@
 import BarcodeScanner from '@/components/barcode-scanner';
-import { getErpOrderInfo } from '@/services/erp/erpAPI';
 import { boundQuickPreview } from '@/services/outbound/outboundAPI';
 import { normalizeCode } from '@/utils/normalize-code';
 import { useMutation } from '@umijs/max';
 import type { InputRef } from 'antd';
 import { Button, Form, Input, Modal } from 'antd';
 import React, { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
-import type { FetchOrderDetailResult, LocationLookupResult, QuickActionType } from '../types';
+import type { LocationLookupResult, QuickActionType } from '../types';
 import InboundAllocateModal from './inbound-allocate-modal';
 
 interface QuickActionConfig {
@@ -54,7 +53,7 @@ export interface QuickActionModalHandle {
   openWithCode: (locationNo: string) => Promise<void>;
 }
 
-type Step = 'input' | 'confirm' | 'order-input';
+type Step = 'input' | 'confirm';
 
 const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProps>(
   ({ type, trigger, onLookup, onFinish }, ref) => {
@@ -65,13 +64,9 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
     const [previewData, setPreviewData] = useState<OutboundAPI.OutboundPreviewVO | null>(null);
 
     const [inboundAllocateOpen, setInboundAllocateOpen] = useState<boolean>(false);
-    const [manualOrderNo, setManualOrderNo] = useState<string>('');
-    const [fetchedOrderDetail, setFetchedOrderDetail] = useState<FetchOrderDetailResult | null>(null);
 
     const [inputForm] = Form.useForm();
     const inputRef = useRef<InputRef>(null);
-    const [orderForm] = Form.useForm();
-    const orderInputRef = useRef<InputRef>(null);
 
     const config = TYPE_CONFIG[type];
     const isInbound = type === 'inbound';
@@ -86,42 +81,34 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
       },
     });
 
-    const orderDetailMutation = useMutation({
-      mutationFn: (orderNo: string) => getErpOrderInfo(orderNo),
-    });
-
     const handleScan = useCallback(
       (value: string) => {
-        if (step === 'order-input') {
-          orderForm.setFieldsValue({ orderNo: value });
-        } else {
-          inputForm.setFieldsValue({ locationNo: value });
-        }
+        inputForm.setFieldsValue({ locationNo: value });
       },
-      [step, inputForm, orderForm],
+      [inputForm],
     );
 
     const handleOpen = useCallback(() => {
-      setStep('input');
-      setCurrentCode('');
-      setLookupResult(null);
-      setPreviewData(null);
-      setInboundAllocateOpen(false);
-      setManualOrderNo('');
-      setFetchedOrderDetail(null);
-      setModalOpen(true);
-      window.setTimeout(() => {
-        inputForm.resetFields();
-        orderForm.resetFields();
-        inputRef.current?.focus();
-      }, 100);
-    }, [inputForm, orderForm]);
+      if (isInbound) {
+        // 快捷入库直接打开操作弹窗
+        setInboundAllocateOpen(true);
+      } else {
+        setStep('input');
+        setCurrentCode('');
+        setLookupResult(null);
+        setPreviewData(null);
+        setModalOpen(true);
+        window.setTimeout(() => {
+          inputForm.resetFields();
+          inputRef.current?.focus();
+        }, 100);
+      }
+    }, [inputForm, isInbound]);
 
     const handleClose = useCallback(() => {
       setModalOpen(false);
       inputForm.resetFields();
-      orderForm.resetFields();
-    }, [inputForm, orderForm]);
+    }, [inputForm]);
 
     const fetchOutboundPreview = useCallback(
       async (keyword: string): Promise<boolean> => {
@@ -142,7 +129,7 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
 
         const result = onLookup(locationNo);
         if (!result) {
-          inputForm.setFields([{ name: 'locationNo', errors: ['未找到匹配货仓，请检查！'] }]);
+          inputForm.setFields([{ name: 'locationNo', errors: ['未找到匹配货仓,请检查！'] }]);
           return;
         }
 
@@ -154,10 +141,8 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
         setLookupResult(result);
 
         if (isInbound) {
-          setStep('order-input');
-          window.setTimeout(() => {
-            orderInputRef.current?.focus();
-          }, 100);
+          // 入库不再需要多步,直接在InboundAllocateModal处理
+          return;
         } else {
           if (result.status === 'OCCUPIED') {
             const success = await fetchOutboundPreview(result.locationNo);
@@ -178,47 +163,6 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
       }
     }, [currentCode, onFinish, handleClose]);
 
-    const handleOrderSubmit = useCallback(async () => {
-      try {
-        const values: { orderNo?: string } = await orderForm.validateFields();
-        const orderNo = values.orderNo?.trim() ?? '';
-
-        if (!orderNo) {
-          setManualOrderNo('');
-          setFetchedOrderDetail(null);
-          setInboundAllocateOpen(true);
-          return;
-        }
-
-        try {
-          const res = await orderDetailMutation.mutateAsync(orderNo);
-          if (res.code === 200 && res.data) {
-            setFetchedOrderDetail({
-              itemName: res.data.material_name,
-              itemWeight: res.data.weight,
-            });
-          } else {
-            setFetchedOrderDetail(null);
-          }
-        } catch {
-          setFetchedOrderDetail(null);
-        }
-        setManualOrderNo(orderNo);
-        setInboundAllocateOpen(true);
-      } catch {}
-    }, [orderForm, orderDetailMutation]);
-
-    const handleInboundAllocateSuccess = useCallback(
-      async (values: OrderAPI.OrderInboundReqVO) => {
-        const success = await onFinish(values);
-        if (success) {
-          handleClose();
-        }
-        return success;
-      },
-      [handleClose, onFinish],
-    );
-
     const openWithCode = useCallback(
       async (locationNo: string) => {
         if (!locationNo) return;
@@ -230,7 +174,7 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
 
         const result = onLookup(locationNo);
         if (!result) {
-          inputForm.setFields([{ name: 'locationNo', errors: ['未找到对应货位，请检查编号'] }]);
+          inputForm.setFields([{ name: 'locationNo', errors: ['未找到对应货位,请检查编号'] }]);
           window.setTimeout(() => {
             inputForm.setFieldsValue({ locationNo });
           }, 50);
@@ -248,10 +192,7 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
         setLookupResult(result);
 
         if (isInbound) {
-          setStep('order-input');
-          window.setTimeout(() => {
-            orderInputRef.current?.focus();
-          }, 100);
+          // 入库不再需要多步,直接在InboundAllocateModal处理
         } else {
           if (result.status === 'OCCUPIED') {
             const success = await fetchOutboundPreview(result.locationNo);
@@ -268,6 +209,17 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
         setModalOpen(true);
       },
       [inputForm, onLookup, isInbound, fetchOutboundPreview],
+    );
+
+    const handleInboundAllocateSuccess = useCallback(
+      async (values: OrderAPI.OrderInboundReqVO) => {
+        const success = await onFinish(values);
+        if (success) {
+          setInboundAllocateOpen(false);
+        }
+        return success;
+      },
+      [onFinish],
     );
 
     useImperativeHandle(ref, () => ({ openWithCode }), [openWithCode]);
@@ -315,26 +267,6 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
                   {config.submitText}
                 </Button>
               </div>
-            ) : step === 'order-input' ? (
-              <div className="flex gap-[12px] w-full mt-[24px]">
-                <Button
-                  color="default"
-                  variant="filled"
-                  className="flex-1 h-[45px] rounded-[10px] text-[15px] font-medium"
-                  onClick={handleClose}
-                >
-                  取消
-                </Button>
-                <Button
-                  block
-                  type={config.submitType}
-                  loading={orderDetailMutation.isPending}
-                  className="flex-1 h-[45px] rounded-[10px] text-[15px] font-medium"
-                  onClick={handleOrderSubmit}
-                >
-                  确认
-                </Button>
-              </div>
             ) : (
               <div className="flex gap-[12px] w-full mt-[24px]">
                 <Button
@@ -357,30 +289,6 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
             )
           }
         >
-          <div style={{ display: step === 'order-input' ? undefined : 'none' }}>
-            <div className="flex flex-col items-center text-center gap-2 mb-3">
-              <div className="text-[64px]">{config.icon}</div>
-              <div className="text-[18px] font-semibold text-[#262626]">{config.title}</div>
-              <div className="text-[13px] text-[#8C8C8C]">{'请扫码或手动输入关联的订单编号'}</div>
-            </div>
-            {lookupResult && (
-              <div className="bg-[#F5F5F5] rounded-[10px] p-[10px_14px] mb-4 text-[13px] text-[#8C8C8C]">
-                目标货位：
-                <span className="font-medium text-[14px] text-[#262626]">货位 #{lookupResult.locationNo}</span>
-              </div>
-            )}
-            <Form form={orderForm} layout="vertical">
-              <Form.Item name="orderNo">
-                <Input
-                  ref={orderInputRef}
-                  size="large"
-                  placeholder="输入订单编号（选填）"
-                  onPressEnter={handleOrderSubmit}
-                  suffix={<BarcodeScanner onScan={handleScan} barcodeFormat="barcode" />}
-                />
-              </Form.Item>
-            </Form>
-          </div>
           <div style={{ display: step === 'input' ? undefined : 'none' }}>
             <div className="flex flex-col items-center text-center gap-2 mb-6">
               <div className="text-[64px]">{config.icon}</div>
@@ -433,16 +341,11 @@ const QuickActionModal = forwardRef<QuickActionModalHandle, QuickActionModalProp
           )}
         </Modal>
 
-        {isInbound && lookupResult?.locationNo && (
+        {isInbound && (
           <InboundAllocateModal
             open={inboundAllocateOpen}
-            locationNo={lookupResult?.locationNo}
-            isManual={!fetchedOrderDetail}
-            orderNo={manualOrderNo}
-            orderDetail={fetchedOrderDetail}
             onCancel={() => {
               setInboundAllocateOpen(false);
-              setFetchedOrderDetail(null);
             }}
             onSuccess={handleInboundAllocateSuccess}
           />

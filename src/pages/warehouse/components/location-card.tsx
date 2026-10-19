@@ -4,11 +4,11 @@ import { ORDER_SOURCE_LABEL } from '../constants';
 import type { StatusCardConfig } from '../types';
 
 const STATUS_CONFIG: Record<LocationAPI.Status, StatusCardConfig> = {
-  IDLE: { label: '空闲', color: '#52C41A', textColor: '#FFFFFF' },
-  OCCUPIED: { label: '占用', color: '#1677FF', textColor: '#FFFFFF' },
-  LOCKED: { label: '锁定', color: '#FAAD14', textColor: '#874D00' },
-  FAULT: { label: '故障', color: '#FF4D4F', textColor: '#FFFFFF' },
+  OCCUPIED: { label: '有货', color: '#52C41A', textColor: '#FFFFFF' },
+  IDLE: { label: '空盘', color: '#8C8C8C', textColor: '#FFFFFF' },
   OFFLINE: { label: '不在货架', color: 'transparent', textColor: '#000000' },
+  FAULT: { label: '故障', color: '#FF4D4F', textColor: '#FFFFFF' },
+  LOCKED: { label: '锁定', color: '#FAAD14', textColor: '#874D00' },
 };
 
 export { STATUS_CONFIG };

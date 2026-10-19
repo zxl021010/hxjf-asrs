@@ -11,7 +11,7 @@ import { normalizeCode } from '@/utils/normalize-code';
 import { PageContainer } from '@ant-design/pro-components';
 import { useMutation, useQuery, useQueryClient, useSearchParams } from '@umijs/max';
 import { App, Button, Divider, Input, Typography } from 'antd';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import FilterTags, { buildFilterTags } from './components/filter-tags';
 import LocationCard from './components/location-card';
 import LocationDetailDrawer from './components/location-detail-drawer';
@@ -31,7 +31,17 @@ const filterLocations = (
   const lowerKeyword = keyword.trim().toLowerCase();
 
   return locations.filter((location) => {
-    const matchesStatus = filterKey === 'all' || location.status === filterKey;
+    let matchesStatus = false;
+    if (filterKey === 'all') {
+      matchesStatus = true;
+    } else if (filterKey === 'executing') {
+      // API placeholder: Filter by locations with active tasks
+      // For now, treat LOCKED as executing (placeholder logic)
+      matchesStatus = location.status === 'LOCKED';
+    } else {
+      matchesStatus = location.status === filterKey;
+    }
+
     const matchesKeyword =
       !lowerKeyword ||
       location.locationNo.toLowerCase().includes(lowerKeyword) ||
@@ -53,10 +63,32 @@ const WarehousePage: React.FC = () => {
       if (res.code !== 200 || !res.data) {
         throw new Error(res.msg || '获取货位数据失败');
       }
-      return res.data.list;
+      return res.data;
     },
   });
-  const locations = data ?? [];
+  const locations = data?.list ?? [];
+  // Only derive global status counts when the full list has been loaded.
+  const overview = useMemo(() => {
+    const complete = data !== undefined && data.list.length === data.total;
+    return {
+      total: data?.total,
+      inUse: complete ? data.list.filter((location) => location.status === 'OCCUPIED').length : undefined,
+      offline: complete ? data.list.filter((location) => location.status === 'OFFLINE').length : undefined,
+    };
+  }, [data]);
+  const overviewCards = [
+    { title: '货盘总数', value: overview.total ?? '--', suffix: '个', color: '#24364B' },
+    { title: '使用中货盘', value: overview.inUse ?? '--', suffix: `/ ${overview.total ?? '--'}`, color: '#24364B' },
+    { title: '不在货架', value: overview.offline ?? '--', suffix: '个', color: '#9BAFC8' },
+    // Inventory quantity and today's completed inbound/outbound quantities are not provided by the current API.
+    { title: '库存总量', value: '--', suffix: '件', color: '#24364B' },
+    {
+      title: '今日入库 / 出库',
+      value: <><span className="text-[#10B981]">--</span><span className="mx-[6px]">/</span><span className="text-[#1677FF]">--</span></>,
+      suffix: '件',
+      color: '#24364B',
+    },
+  ];
 
   const [activeFilter, setActiveFilter] = useState<FilterKey>('all');
   const [searchParams, setSearchParams] = useSearchParams();
@@ -72,10 +104,31 @@ const WarehousePage: React.FC = () => {
   const selectionMode = selectedIds.size > 0;
 
   const [activeRow, setActiveRow] = useState<number | null>(1);
+  const [isNavExpanded, setIsNavExpanded] = useState<boolean>(false);
   const rowRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const navContainerRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const [gridHeight, setGridHeight] = useState<number | null>(null);
   const isScrollingByNav = useRef<boolean>(false);
+
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current;
+    const grid = gridContainerRef.current;
+    if (!toolbar || !grid) return;
+
+    const updateGridHeight = (): void => {
+      setGridHeight(Math.max(240, window.innerHeight - grid.getBoundingClientRect().top - 16));
+    };
+    updateGridHeight();
+    const observer = new ResizeObserver(updateGridHeight);
+    observer.observe(toolbar);
+    window.addEventListener('resize', updateGridHeight);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateGridHeight);
+    };
+  }, []);
 
   const { data: locationDetail } = useQuery({
     queryKey: ['location', 'detail', selectedLocationId],
@@ -187,10 +240,13 @@ const WarehousePage: React.FC = () => {
     if (!container) return;
 
     isScrollingByNav.current = true;
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    navContainerRef.current
-      ?.querySelector(`[data-nav-row-no="${rowNo}"]`)
-      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    const top =
+      container.scrollTop +
+      el.getBoundingClientRect().top -
+      container.getBoundingClientRect().top -
+      container.clientTop;
+
+    container.scrollTo({ top, behavior: 'smooth' });
   }, []);
 
   const handleFilterChange = useCallback((key: FilterKey) => {
@@ -351,9 +407,6 @@ const WarehousePage: React.FC = () => {
       if (!best) return;
       setActiveRow((prev) => {
         if (prev !== best) {
-          navContainerRef.current
-            ?.querySelector(`[data-nav-row-no="${best}"]`)
-            ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
           return best;
         }
         return prev;
@@ -388,82 +441,108 @@ const WarehousePage: React.FC = () => {
   return (
     <PageContainer pageHeaderRender={false}>
       <div className={`${selectionMode ? 'pb-[140px]' : ''}`}>
-        <div className="flex items-center gap-3 mb-[12px]">
-          <QuickActionModal
-            type="inbound"
-            trigger={
-              <Button size="large" variant="solid" color="green">
-                📥 快捷入库
-              </Button>
-            }
-            onLookup={handleInboundLookup}
-            onFinish={handleInboundSubmit}
-          />
-          <QuickActionModal
-            ref={quickOutboundRef}
-            type="outbound"
-            trigger={
-              <Button size="large" type="primary">
-                📤 快捷出库
-              </Button>
-            }
-            onLookup={handleOutboundLookup}
-            onFinish={handleOutboundSubmit}
-          />
-          <Input
-            size="large"
-            placeholder="输入订单号或货仓编号"
-            prefix="🔍"
-            suffix={<BarcodeScanner onScan={handleScan} />}
-            value={keyword}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) => setKeyword(event.target.value)}
-            onClear={handleClearKeyword}
-            allowClear
-            className="flex-1"
-          />
-        </div>
-
-        <Text type="secondary" className="block text-[12px]">
-          提示：可扫码或输入订单号/货仓编号，按回车执行
-        </Text>
-
-        <div className="flex items-center justify-between">
-          <FilterTags tags={filterTags} activeKey={activeFilter} onChange={handleFilterChange} />
-          <div className="flex items-center gap-[4px] shrink-0 ml-[8px]">
-            <Button type="link" size="small" onClick={handleClearFilter}>
-              清除筛选
-            </Button>
-            <Button type="link" size="small" onClick={handleRefresh} loading={isFetching}>
-              刷新
-            </Button>
+        <div ref={toolbarRef}>
+          <div className="flex items-center gap-3 mb-[12px]">
+            <QuickActionModal
+              type="inbound"
+              trigger={
+                <Button size="large" variant="solid" color="green">
+                  📥 快捷入库
+                </Button>
+              }
+              onLookup={handleInboundLookup}
+              onFinish={handleInboundSubmit}
+            />
+            <QuickActionModal
+              ref={quickOutboundRef}
+              type="outbound"
+              trigger={
+                <Button size="large" type="primary">
+                  📤 快捷出库
+                </Button>
+              }
+              onLookup={handleOutboundLookup}
+              onFinish={handleOutboundSubmit}
+            />
+            <Input
+              size="large"
+              placeholder="输入订单号或货仓编号"
+              prefix="🔍"
+              suffix={<BarcodeScanner onScan={handleScan} />}
+              value={keyword}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>) => setKeyword(event.target.value)}
+              onClear={handleClearKeyword}
+              allowClear
+              className="flex-1"
+            />
           </div>
-        </div>
 
-        <div className="flex gap-[10px]" style={{ height: `calc(100vh - ${WAREHOUSE_GRID_HEIGHT_OFFSET}px)` }}>
-          {/* Left row navigation */}
-          <div
-            ref={navContainerRef}
-            className="w-[72px] shrink-0 flex flex-col gap-[4px] overflow-y-auto scrollbar-hidden"
-          >
-            {rowGroupedLocations.map(({ rowNo, locations, range }) => (
-              <div
-                key={rowNo}
-                data-nav-row-no={rowNo}
-                onClick={() => handleScrollToRow(rowNo)}
-                className={`text-center px-[6px] py-[8px] rounded-[8px] text-[12px] cursor-pointer transition-colors leading-tight ${
-                  activeRow === rowNo
-                    ? 'bg-[#1677FF] text-white font-medium'
-                    : 'bg-[#0000000a] text-[#595959] hover:bg-[#E8E8E8]'
-                }`}
-              >
-                <div>第{rowNo}行</div>
-                <div className="text-[10px] opacity-70">({activeFilter === 'all' ? range : locations.length})</div>
+          <Text type="secondary" className="block text-[12px]">
+            提示：可扫码或输入订单号/货仓编号，按回车执行
+          </Text>
+
+          <section aria-label="货盘统计" className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-[16px] mt-[12px] mb-[12px]">
+            {overviewCards.map((card) => (
+              <div key={card.title} className="min-w-0 rounded-[16px] border border-[#E2E8F0] bg-white px-[20px] py-[16px]">
+                <div className="mb-[8px] text-[14px] leading-[20px] text-[#94A3B8]">{card.title}</div>
+                <div className="flex flex-wrap items-baseline gap-x-[8px]">
+                  <span className="text-[32px] font-bold leading-[40px] tabular-nums" style={{ color: card.color }}>{card.value}</span>
+                  <span className="text-[14px] text-[#94A3B8]">{card.suffix}</span>
+                </div>
               </div>
             ))}
+          </section>
+
+          <div className="flex flex-wrap items-center justify-between gap-x-[12px]">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-[16px]">
+              <h2 className="m-0 shrink-0 text-[14px] font-semibold text-[#24364B]">货盘状态图（点击货盘查看详情）</h2>
+              <FilterTags tags={filterTags} activeKey={activeFilter} onChange={handleFilterChange} />
+            </div>
+            <div className="flex items-center gap-[4px] shrink-0 ml-[8px]">
+              <Button type="link" size="small" onClick={handleClearFilter}>
+                清除筛选
+              </Button>
+              <Button type="link" size="small" onClick={handleRefresh} loading={isFetching}>
+                刷新
+              </Button>
+            </div>
           </div>
 
-          {/* Right scrollable content */}
-          <div ref={scrollContainerRef} className="flex-1 min-w-0 overflow-y-auto scrollbar-hidden">
+        </div>
+
+        <div ref={gridContainerRef} className="flex min-h-0 min-w-0 flex-col gap-[10px]" style={{ height: gridHeight ?? `calc(100vh - ${WAREHOUSE_GRID_HEIGHT_OFFSET}px)` }}>
+          {/* Horizontal row navigation */}
+          {rowGroupedLocations.length > 0 && (
+            <div className="flex shrink-0 items-start gap-[8px]">
+              <div className={`flex flex-wrap gap-[8px] flex-1 min-w-0 ${!isNavExpanded ? 'max-h-[38px] overflow-hidden' : ''}`}>
+                {rowGroupedLocations.map(({ rowNo, locations, range }) => (
+                  <button
+                    key={rowNo}
+                    type="button"
+                    aria-pressed={activeRow === rowNo}
+                    onClick={() => handleScrollToRow(rowNo)}
+                    className={`whitespace-nowrap rounded-[16px] px-[14px] py-[6px] text-[13px] cursor-pointer transition-colors border ${
+                      activeRow === rowNo
+                        ? 'bg-[#E6F4FF] border-[#1677FF] text-[#1677FF]'
+                        : 'bg-white border-[#E8E8E8] text-[#8C8C8C] hover:bg-[#FAFAFA]'
+                    }`}
+                  >
+                    第{rowNo}列（{activeFilter === 'all' ? range : locations.length}）
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsNavExpanded(!isNavExpanded)}
+                className="shrink-0 rounded-[16px] px-[14px] py-[6px] text-[13px] cursor-pointer transition-colors border bg-white border-[#E8E8E8] text-[#8C8C8C] hover:bg-[#FAFAFA]"
+              >
+                {isNavExpanded ? '收起 ▲' : '展开 ▼'}
+              </button>
+            </div>
+          )}
+
+          {/* Scrollable content */}
+          <div ref={scrollContainerRef} className="flex-1 min-h-0 min-w-0 overflow-y-auto scrollbar-hidden">
             {rowGroupedLocations.map(({ rowNo, locations: groupedLocs, range }) => (
               <div
                 key={rowNo}
@@ -476,8 +555,8 @@ const WarehousePage: React.FC = () => {
                   }
                 }}
               >
-                <Divider dashed orientation="center" plain size="small">
-                  第{rowNo}行（{activeFilter === 'all' ? range : groupedLocs.length}）
+                <Divider dashed orientation="left" orientationMargin={0} plain size="small">
+                  第{rowNo}列（{activeFilter === 'all' ? range : groupedLocs.length}）
                 </Divider>
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-10 xl:grid-cols-[repeat(12,_minmax(0,_1fr))] 2xl:grid-cols-[repeat(14,_minmax(0,_1fr))] gap-[8px] content-start">
                   {groupedLocs.map((location) => (

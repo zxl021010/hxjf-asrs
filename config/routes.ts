@@ -10,22 +10,26 @@ export default [
   },
   {
     path: '/warehouse',
-    name: '货仓',
+    name: '库存总览',
+    icon: 'AppstoreOutlined',
     component: '@/pages/warehouse',
   },
   {
     path: '/task',
-    name: '任务',
+    name: '出入库记录',
+    icon: 'SwapOutlined',
     component: '@/pages/task',
   },
   {
     path: '/exception',
     name: '异常',
+    icon: 'WarningOutlined',
     component: '@/pages/exception',
   },
   {
     path: '/log',
-    name: '日志',
+    name: '操作日志',
+    icon: 'FileTextOutlined',
     component: '@/pages/log',
   },
 ];

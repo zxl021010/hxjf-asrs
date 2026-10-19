@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type FilterType = 'all' | TaskAPI.TaskType | 'EXCEPTION';
+export type FilterType = 'INBOUND_RECORDS' | 'OUTBOUND_RECORDS' | 'EXECUTING' | 'all' | TaskAPI.TaskType | 'EXCEPTION';
 
 export const TASK_TYPE_CONFIG: Record<
   TaskAPI.TaskType,
@@ -38,6 +38,9 @@ export const STATUS_CONFIG: Record<
 };
 
 export const FILTER_SUBTITLE: Record<FilterType, string> = {
+  INBOUND_RECORDS: '入库记录',
+  OUTBOUND_RECORDS: '出库记录',
+  EXECUTING: '执行中的任务',
   all: '全部任务',
   INBOUND: '入库任务',
   OUTBOUND: '出库任务',
@@ -46,9 +49,10 @@ export const FILTER_SUBTITLE: Record<FilterType, string> = {
 };
 
 export const FILTER_TABS: readonly { readonly value: FilterType; readonly label: string }[] = [
+  { value: 'INBOUND_RECORDS', label: '📥 入库记录' },
+  { value: 'OUTBOUND_RECORDS', label: '📤 出库记录' },
+  { value: 'EXECUTING', label: '⚡ 执行中' },
   { value: 'all', label: '全部' },
-  { value: 'INBOUND', label: '📥 入库' },
-  { value: 'OUTBOUND', label: '📤 出库' },
   { value: 'MOVE', label: '🔄 移库' },
   { value: 'EXCEPTION', label: '⚠️ 异常' },
 ];
@@ -90,8 +94,22 @@ export const filterTasks = (
   const lowerKeyword = keyword.trim().toLowerCase();
 
   return tasks.filter((task) => {
-    const matchesFilter =
-      filterKey === 'all' || (filterKey === 'EXCEPTION' ? task.status === 'EXCEPTION' : task.taskType === filterKey);
+    let matchesFilter = false;
+
+    if (filterKey === 'INBOUND_RECORDS') {
+      matchesFilter = task.taskType === 'INBOUND';
+    } else if (filterKey === 'OUTBOUND_RECORDS') {
+      matchesFilter = task.taskType === 'OUTBOUND';
+    } else if (filterKey === 'EXECUTING') {
+      // Show executing + pending (queue) tasks
+      matchesFilter = task.status === 'EXECUTING' || task.status === 'PENDING';
+    } else if (filterKey === 'all') {
+      matchesFilter = true;
+    } else if (filterKey === 'EXCEPTION') {
+      matchesFilter = task.status === 'EXCEPTION';
+    } else {
+      matchesFilter = task.taskType === filterKey;
+    }
 
     const matchesKeyword =
       !lowerKeyword ||

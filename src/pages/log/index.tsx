@@ -3,13 +3,22 @@ import { getLogDetail, getLogPage } from '@/services/log/logAPI';
 import { PageContainer } from '@ant-design/pro-components';
 import { keepPreviousData } from '@tanstack/react-query';
 import { useQuery } from '@umijs/max';
-import { Button, Card, Spin } from 'antd';
+import { Button, Card, Spin, Tag } from 'antd';
 import React, { useCallback, useMemo, useState } from 'react';
 import LogDetailDrawer from './components/log-detail-drawer';
 import { CATEGORY_STYLE, SOURCE_STYLE } from './types';
 
 const INITIAL_SIZE = 20;
 const SIZE_INCREMENT = 20;
+
+type LogCategoryFilter = 'all' | 'inbound' | 'outbound' | 'system';
+
+const LOG_FILTER_TABS: readonly { readonly value: LogCategoryFilter; readonly label: string }[] = [
+  { value: 'all', label: '全部' },
+  { value: 'inbound', label: '📥 入库' },
+  { value: 'outbound', label: '📤 出库' },
+  { value: 'system', label: '🔧 系统' },
+];
 
 interface LogCardProps {
   readonly log: LogAPI.BusinessEventLogVO;
@@ -58,11 +67,12 @@ const LogCard: React.FC<LogCardProps> = ({ log, onClick }) => {
 
 const LogPage: React.FC = () => {
   const [size, setSize] = useState<number>(INITIAL_SIZE);
+  const [activeFilter, setActiveFilter] = useState<LogCategoryFilter>('all');
 
   const [selectedLogId, setSelectedLogId] = useState<number | null>(null);
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
 
-  const logListQueryKey = useMemo(() => ['log', 'page', size] as const, [size]);
+  const logListQueryKey = useMemo(() => ['log', 'page', size, activeFilter] as const, [size, activeFilter]);
 
   const {
     data: logPageData,
@@ -72,6 +82,8 @@ const LogPage: React.FC = () => {
   } = useQuery({
     queryKey: logListQueryKey,
     queryFn: async () => {
+      // API placeholder: Category filtering requires backend support
+      // For now, fetch all logs and filter client-side
       const res = await getLogPage({ page: 1, size });
       if (res.code !== 200) {
         throw new Error(res.msg || '获取日志列表失败');
@@ -81,7 +93,24 @@ const LogPage: React.FC = () => {
     placeholderData: keepPreviousData,
   });
 
-  const logs = logPageData?.list ?? [];
+  // Client-side filtering (API placeholder)
+  const allLogs = logPageData?.list ?? [];
+  const filteredLogs = useMemo(() => {
+    if (activeFilter === 'all') return allLogs;
+
+    return allLogs.filter((log) => {
+      if (activeFilter === 'inbound') {
+        return log.eventType === 'INBOUND';
+      } else if (activeFilter === 'outbound') {
+        return log.eventType === 'OUTBOUND';
+      } else if (activeFilter === 'system') {
+        return log.eventType === 'SYSTEM';
+      }
+      return true;
+    });
+  }, [allLogs, activeFilter]);
+
+  const logs = filteredLogs;
   const total = logPageData?.total ?? 0;
   const loading = isPending;
   const loadingMore = isFetching && size > INITIAL_SIZE;
@@ -110,6 +139,11 @@ const LogPage: React.FC = () => {
   const handleRefresh = useCallback(() => {
     refetch();
   }, [refetch]);
+
+  const handleFilterChange = useCallback((filter: LogCategoryFilter) => {
+    setActiveFilter(filter);
+    setSize(INITIAL_SIZE); // Reset pagination when filter changes
+  }, []);
 
   const handleCardClick = useCallback((log: LogAPI.BusinessEventLogVO) => {
     setSelectedLogId(log.id);
@@ -141,6 +175,24 @@ const LogPage: React.FC = () => {
         >
           🔄 刷新
         </Button>
+      </div>
+
+      {/* Category filter tabs */}
+      <div className="flex gap-[8px] py-[12px] border-b border-[#F0F0F0]">
+        {LOG_FILTER_TABS.map((tab) => (
+          <Tag
+            key={tab.value}
+            color={activeFilter === tab.value ? '#1677FF' : 'default'}
+            className="cursor-pointer m-0 rounded-[20px] px-[16px] py-[6px] text-[13px] font-medium"
+            style={{
+              borderColor: activeFilter === tab.value ? '#1677FF' : '#D9D9D9',
+              color: activeFilter === tab.value ? '#FFF' : '#595959',
+            }}
+            onClick={() => handleFilterChange(tab.value)}
+          >
+            {tab.label}
+          </Tag>
+        ))}
       </div>
 
       <div className="pt-[16px] pb-[80px]">

@@ -95,50 +95,27 @@ const LogoutButton: React.FC = () => {
 export const layout: RunTimeLayoutConfig = ({ initialState }) => {
   return {
     ...initialState?.settings,
+    siderWidth: 200,
     headerTitleRender: (logo, title) => (
-      <div className="flex items-center gap-[10px]">
-        {/* {logo} */}
-        <Tooltip
-          placement="right"
-          title={
-            <>
-              <span>{`Version: ${process.env.REACT_APP_VERSION ?? '-'}`}</span>
-              <br />
-              <span>{`Time: ${dayjs(process.env.REACT_APP_TIME).format('YYYY-MM-DD HH:mm:ss')}`}</span>
-            </>
-          }
-          color="blue"
-        >
-          <div className="w-[36px] h-[36px] bg-[#ffffff33] text-[20px] rounded-[10px] flex items-center justify-center">
-            📦
-          </div>
-        </Tooltip>
-        <span className="text-[20px] font-[600] text-white mr-[40px]">{title}</span>
-      </div>
+      <Tooltip
+        placement="right"
+        title={
+          <>
+            <span>{`Version: ${process.env.REACT_APP_VERSION ?? '-'}`}</span>
+            <br />
+            <span>{`Time: ${dayjs(process.env.REACT_APP_TIME).format('YYYY-MM-DD HH:mm:ss')}`}</span>
+          </>
+        }
+        color="blue"
+      >
+        <span className="text-[20px] font-[600] text-white">{title}</span>
+      </Tooltip>
     ),
     menuItemRender: (item, defaultDom) => {
       if (!item.path) return defaultDom;
       const isException = item.path === '/exception';
       return (
-        <Link
-          to={item.path}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            height: 36,
-            borderRadius: 10,
-            padding: '8px 16px',
-            marginInline: '-14px',
-            transition: 'all 0.2s',
-            fontWeight: 500,
-            ...(item.path === window.location.pathname
-              ? {
-                  backgroundColor: '#ffffff',
-                  color: '#1677FF',
-                }
-              : {}),
-          }}
-        >
+        <Link to={item.path} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {defaultDom}
           {isException && <ExceptionBadge />}
         </Link>

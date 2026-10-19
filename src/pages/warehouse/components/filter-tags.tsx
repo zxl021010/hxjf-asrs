@@ -12,27 +12,40 @@ const buildFilterTags = (locations: readonly LocationAPI.LocationVO[]): readonly
     OFFLINE: 0,
   };
 
+  // Count executing locations (deduplicated by location with active tasks)
+  // API placeholder: taskId or hasActiveTask field not yet available
+  const executingLocationIds = new Set<number>();
+
   locations.forEach((location) => {
     if (location.status in statusCounts) {
       statusCounts[location.status] += 1;
+    }
+    // Placeholder: When API provides task info, check for active tasks
+    // For now, treat LOCKED as potential executing state
+    if (location.status === 'LOCKED') {
+      executingLocationIds.add(location.id);
     }
   });
 
   return [
     { key: 'all', label: '全部' },
-    { key: 'IDLE', label: `🟢 ${STATUS_CONFIG.IDLE.label}`, count: statusCounts.IDLE },
     {
       key: 'OCCUPIED',
-      label: `🔵 ${STATUS_CONFIG.OCCUPIED.label}`,
+      label: STATUS_CONFIG.OCCUPIED.label,
+      color: STATUS_CONFIG.OCCUPIED.color,
       count: statusCounts.OCCUPIED,
     },
-    { key: 'LOCKED', label: `🟠 ${STATUS_CONFIG.LOCKED.label}`, count: statusCounts.LOCKED },
-    { key: 'FAULT', label: `🔴 ${STATUS_CONFIG.FAULT.label}`, count: statusCounts.FAULT },
+    { key: 'IDLE', label: STATUS_CONFIG.IDLE.label, color: STATUS_CONFIG.IDLE.color, count: statusCounts.IDLE },
+    { key: 'LOCKED', label: STATUS_CONFIG.LOCKED.label, color: STATUS_CONFIG.LOCKED.color, count: statusCounts.LOCKED },
     {
       key: 'OFFLINE',
-      label: `⚫ ${STATUS_CONFIG.OFFLINE.label}`,
+      label: STATUS_CONFIG.OFFLINE.label,
+      // 不在货架的卡片背景透明，圆点使用独立颜色。
+      color: '#404040',
       count: statusCounts.OFFLINE,
     },
+    { key: 'FAULT', label: STATUS_CONFIG.FAULT.label, color: STATUS_CONFIG.FAULT.color, count: statusCounts.FAULT },
+    { key: 'executing', label: '执行中', color: '#FA8C16', count: executingLocationIds.size },
   ];
 };
 
@@ -59,6 +72,13 @@ const FilterTags: React.FC<FilterTagsProps> = ({ tags, activeKey, onChange }) =>
             color: isActive ? '#1677FF' : '#8C8C8C',
           }}
         >
+          {tag.color && (
+            <span
+              aria-hidden="true"
+              className="inline-block h-[16px] w-[16px] shrink-0 rounded-full border border-black/80"
+              style={{ backgroundColor: tag.color }}
+            />
+          )}
           <span>{tag.label}</span>
           {!isAll && <span>({tag.count})</span>}
         </Tag>
